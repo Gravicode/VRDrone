@@ -32,6 +32,9 @@ using Windows.UI.Xaml;
 using Windows.Globalization;
 using Windows.UI.Core;
 using System.Threading.Tasks;
+using Microsoft.Azure.CognitiveServices.Vision.ComputerVision.Models;
+using Windows.Storage;
+using Windows.UI.Xaml.Media.Imaging;
 
 // The speech recognizer used throughout this sample.
 
@@ -309,6 +312,13 @@ namespace VRDrone.App
             }
 
         }
+        
+        private async Task<StorageFile> TakePhoto()
+        {
+
+           
+            return null;
+        }
         /// <summary>
         /// Handle events fired when a result is generated. This may include a garbage rule that fires when general room noise
         /// or side-talk is captured (this will have a confidence of Rejected typically, but may occasionally match a rule with
@@ -430,15 +440,22 @@ namespace VRDrone.App
                             break;
                         case TagCommands.SeeMe:
                             {
-                                /*
+                                
                                 var photo = await TakePhoto();
                                 //call computer vision
-                                var res = await ApiContainer.GetApi<ComputerVisionService>().RecognizeImage(photo);
-                                if (!string.IsNullOrEmpty(res))
+                                if (photo != null)
                                 {
-                                    await speech.Read(res);
-                                    resultTextBlock.Text = "I see " + res;
-                                }*/
+                                    var res = await ApiContainer.GetApi<ComputerVisionService>().RecognizeImage(photo);
+                                    if (!string.IsNullOrEmpty(res))
+                                    {
+                                        await speech.Read(res);
+                                        //resultTextBlock.Text = "I see " + res;
+                                    }
+                                }
+                                else
+                                {
+                                    await speech.Read("cannot get video frame");
+                                }
                             }
                             break;
                        
@@ -492,6 +509,7 @@ namespace VRDrone.App
         {
             this.InitializeComponent();
             PopulateCommands();
+            ApiContainer.Register<ComputerVisionService>(new ComputerVisionService());
             this.dispatcher = new UIDispatcher(SynchronizationContext.Current);
             this.notifier = new UINotifier();
 
@@ -586,15 +604,17 @@ namespace VRDrone.App
                     // IsLive = true,
                     BufferTime = TimeSpan.FromSeconds(0.0),
                 };
-
+            
                 mediaStreamSource.SampleRequested += this.MediaStreamSource_SampleRequested;
 
                 this.VideoElement.SetMediaStreamSource(mediaStreamSource);
-
+                
                 // never turn real time playback on
                 // _mediaElement.RealTimePlayback = true;
             }
         }
+
+      
 
         private void MediaStreamSource_SampleRequested(
             MediaStreamSource sender,
@@ -603,13 +623,14 @@ namespace VRDrone.App
 #if EMULATOR_ON
 #else
             var sample = this.ViewModel.VideoViewModel.GetSample();
-
+            
             // Debug.WriteLine($"{nameof(MediaStreamSource_SampleRequested)} - video ready? {sample != null}");
             if (sample != null)
             {
                 // Debug.WriteLine($"{nameof(MediaStreamSource_SampleRequested)} - got sample time index {sample.TimeIndex}, length {sample.Buffer.Length}b, duration {sample.Duration}");
                 args.Request.Sample = MediaStreamSample.CreateFromBuffer(sample.Buffer.AsBuffer(), sample.TimeIndex);
                 args.Request.Sample.Duration = sample.Duration;
+               
             }
 #endif
         }

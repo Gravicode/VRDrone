@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using Microsoft.ProjectOxford.Vision;
-using Microsoft.ProjectOxford.Vision.Contract;
 using System.IO;
 using Windows.UI.Xaml.Controls;
 using System.Diagnostics;
 using Windows.Storage;
+using Microsoft.Azure.CognitiveServices.Vision.ComputerVision;
+using Microsoft.Azure.CognitiveServices.Vision.ComputerVision.Models;
 
 // ----------------------------------------------------------------------
 // KEY SAMPLE CODE ENDS HERE 
@@ -17,9 +17,71 @@ namespace VRDrone.App
 {
     public class ComputerVisionService
     {
-       
-        VisionServiceClient VisionServiceClient = new VisionServiceClient(APPCONTANTS.COMPUTERVISION_KEY, "https://southeastasia.api.cognitive.microsoft.com/vision/v1.0");
+        // Create a client
+        ComputerVisionClient VisionServiceClient = Authenticate("https://southeastasia.api.cognitive.microsoft.com/vision/v1.0", APPCONTANTS.COMPUTERVISION_KEY);
+        //VisionServiceClient VisionServiceClient = new VisionServiceClient(APPCONTANTS.COMPUTERVISION_KEY, "https://southeastasia.api.cognitive.microsoft.com/vision/v1.0");
+        /*
+ * AUTHENTICATE
+ * Creates a Computer Vision client used by each example.
+ */
+        public static ComputerVisionClient Authenticate(string endpoint, string key)
+        {
+            ComputerVisionClient client =
+              new ComputerVisionClient(new ApiKeyServiceClientCredentials(key))
+              { Endpoint = endpoint };
+            return client;
+        }
+        public static byte[] ReadToEnd(System.IO.Stream stream)
+        {
+            long originalPosition = 0;
 
+            if (stream.CanSeek)
+            {
+                originalPosition = stream.Position;
+                stream.Position = 0;
+            }
+
+            try
+            {
+                byte[] readBuffer = new byte[4096];
+
+                int totalBytesRead = 0;
+                int bytesRead;
+
+                while ((bytesRead = stream.Read(readBuffer, totalBytesRead, readBuffer.Length - totalBytesRead)) > 0)
+                {
+                    totalBytesRead += bytesRead;
+
+                    if (totalBytesRead == readBuffer.Length)
+                    {
+                        int nextByte = stream.ReadByte();
+                        if (nextByte != -1)
+                        {
+                            byte[] temp = new byte[readBuffer.Length * 2];
+                            Buffer.BlockCopy(readBuffer, 0, temp, 0, readBuffer.Length);
+                            Buffer.SetByte(temp, totalBytesRead, (byte)nextByte);
+                            readBuffer = temp;
+                            totalBytesRead++;
+                        }
+                    }
+                }
+
+                byte[] buffer = readBuffer;
+                if (readBuffer.Length != totalBytesRead)
+                {
+                    buffer = new byte[totalBytesRead];
+                    Buffer.BlockCopy(readBuffer, 0, buffer, 0, totalBytesRead);
+                }
+                return buffer;
+            }
+            finally
+            {
+                if (stream.CanSeek)
+                {
+                    stream.Position = originalPosition;
+                }
+            }
+        }
         public async Task<byte[]> GetThumbnail(string Url, int width, int height)
         {
             bool useSmartCropping = true;
@@ -28,21 +90,21 @@ namespace VRDrone.App
             // Either upload an image, or supply a url
             //
             byte[] thumbnail;
-            thumbnail = await ThumbnailUrl(Url, width, height, useSmartCropping);
+            thumbnail = ReadToEnd( await ThumbnailUrl(Url, width, height, useSmartCropping));
 
             return thumbnail;
         }
 
         public async Task<string> RecognizeText(StorageFile imageFile)
         {
-            var x = await UploadAndRecognizeImage(imageFile, GetSupportedLanguages().Where(y => y.ShortCode == "en").SingleOrDefault().ShortCode);
+            var x = await UploadAndRecognizeImage(imageFile, OcrLanguages.En);
             return LogOcrResults(x);
 
         }
 
         public async void RecognizeTextFromUrlImage(string URLImage)
         {
-            var x = await RecognizeUrl(URLImage, GetSupportedLanguages().Where(y => y.ShortCode == "en").SingleOrDefault().ShortCode);
+            var x = await RecognizeUrl(URLImage, OcrLanguages.En);
             LogOcrResults(x);
 
         }
@@ -53,7 +115,7 @@ namespace VRDrone.App
             LogAnalysisResult(x);
 
         }
-        public async Task<AnalysisResult> GetImageAnalysis(StorageFile imageFile)
+        public async Task<ImageAnalysis> GetImageAnalysis(StorageFile imageFile)
         {
             var x = await UploadAndAnalyzeImage(imageFile);
             return x;
@@ -64,7 +126,7 @@ namespace VRDrone.App
             var result = LogAnalysisResult(x);
             return result;
         }
-        protected string LogAnalysisResult(AnalysisResult result)
+        protected string LogAnalysisResult(ImageAnalysis result)
         {
             string Speak = string.Empty;
             if (result == null)
@@ -127,7 +189,7 @@ namespace VRDrone.App
                 Log("Racy Score : " + result.Adult.RacyScore);
             }
 
-            if (result.Categories != null && result.Categories.Length > 0)
+            if (result.Categories != null && result.Categories.Count > 0)
             {
                 Log("Categories : ");
                 foreach (var category in result.Categories)
@@ -136,7 +198,7 @@ namespace VRDrone.App
                 }
             }
 
-            if (result.Faces != null && result.Faces.Length > 0)
+            if (result.Faces != null && result.Faces.Count > 0)
             {
                 Log("Faces : ");
                 foreach (var face in result.Faces)
@@ -151,7 +213,7 @@ namespace VRDrone.App
                 Log("Dominant Color Background : " + result.Color.DominantColorBackground);
                 Log("Dominant Color Foreground : " + result.Color.DominantColorForeground);
 
-                if (result.Color.DominantColors != null && result.Color.DominantColors.Length > 0)
+                if (result.Color.DominantColors != null && result.Color.DominantColors.Count > 0)
                 {
                     string colors = "Dominant Colors : ";
                     foreach (var color in result.Color.DominantColors)
@@ -192,23 +254,23 @@ namespace VRDrone.App
 
 
         #region Image Recognition
-        private async Task<AnalysisResult> UploadAndAnalyzeImage(StorageFile imageFile)
+        private async Task<ImageAnalysis> UploadAndAnalyzeImage(StorageFile imageFile)
         {
             var stream = await imageFile.OpenStreamForReadAsync();
 
          
                 Log("Calling VisionServiceClient.AnalyzeImageAsync()...");
-                VisualFeature[] visualFeatures = new VisualFeature[] { VisualFeature.Adult, VisualFeature.Categories, VisualFeature.Color, VisualFeature.Description, VisualFeature.Faces, VisualFeature.ImageType, VisualFeature.Tags };
-                AnalysisResult analysisResult = await VisionServiceClient.AnalyzeImageAsync(stream, visualFeatures);
+            VisualFeatureTypes?[] visualFeatures = new VisualFeatureTypes?[] { VisualFeatureTypes.Adult, VisualFeatureTypes.Categories, VisualFeatureTypes.Color, VisualFeatureTypes.Description, VisualFeatureTypes.Faces, VisualFeatureTypes.ImageType, VisualFeatureTypes.Tags };
+                var analysisResult = await VisionServiceClient.AnalyzeImageInStreamAsync(stream, visualFeatures);
                 return analysisResult;
             
         }
 
-        private async Task<AnalysisResult> AnalyzeUrl(string imageUrl)
+        private async Task<ImageAnalysis> AnalyzeUrl(string imageUrl)
         {
             Log("Calling VisionServiceClient.AnalyzeImageAsync()...");
-            VisualFeature[] visualFeatures = new VisualFeature[] { VisualFeature.Adult, VisualFeature.Categories, VisualFeature.Color, VisualFeature.Description, VisualFeature.Faces, VisualFeature.ImageType, VisualFeature.Tags };
-            AnalysisResult analysisResult = await VisionServiceClient.AnalyzeImageAsync(imageUrl, visualFeatures);
+            VisualFeatureTypes?[] visualFeatures = new VisualFeatureTypes?[] { VisualFeatureTypes.Adult, VisualFeatureTypes.Categories, VisualFeatureTypes.Color, VisualFeatureTypes.Description, VisualFeatureTypes.Faces, VisualFeatureTypes.ImageType, VisualFeatureTypes.Tags };
+            var analysisResult = await VisionServiceClient.AnalyzeImageAsync(imageUrl, visualFeatures);
             return analysisResult;
         }
         #endregion
@@ -247,11 +309,11 @@ namespace VRDrone.App
                 new RecognizeLanguage(){ ShortCode = "tr",      LongName = "Turkish"  }
             };
         }
-        private async Task<OcrResults> UploadAndRecognizeImage(StorageFile imageFile, string language)
+        private async Task<OcrResult> UploadAndRecognizeImage(StorageFile imageFile, OcrLanguages language)
         {
             var stream = await imageFile.OpenStreamForReadAsync();
             Log("Calling VisionServiceClient.RecognizeTextAsync()...");
-            OcrResults ocrResult = await VisionServiceClient.RecognizeTextAsync(stream, language);
+            var ocrResult = await VisionServiceClient.RecognizePrintedTextInStreamAsync(true,stream, language);
             return ocrResult;
         }
 
@@ -261,11 +323,11 @@ namespace VRDrone.App
         /// <param name="imageUrl">The url to perform recognition on</param>
         /// <param name="language">The language code to recognize for</param>
         /// <returns></returns>
-        private async Task<OcrResults> RecognizeUrl(string imageUrl, string language)
+        private async Task<OcrResult> RecognizeUrl(string imageUrl, OcrLanguages language)
         {
            
             Log("Calling VisionServiceClient.RecognizeTextAsync()...");
-            OcrResults ocrResult = await VisionServiceClient.RecognizeTextAsync(imageUrl, language);
+            var ocrResult = await VisionServiceClient.RecognizePrintedTextAsync(true,imageUrl, language);
             return ocrResult;
 
             // -----------------------------------------------------------------------
@@ -276,7 +338,7 @@ namespace VRDrone.App
         #endregion
 
         #region Get Thumbnail
-        private async Task<byte[]> UploadAndThumbnailImage(string imageFilePath, int width, int height, bool smartCropping)
+        private async Task<Stream> UploadAndThumbnailImage(string imageFilePath, int width, int height, bool smartCropping)
         {
 
             using (Stream imageFileStream = File.OpenRead(imageFilePath))
@@ -285,7 +347,7 @@ namespace VRDrone.App
                 // Upload an image and generate a thumbnail
                 //
                 Log("Calling VisionServiceClient.GetThumbnailAsync()...");
-                return await VisionServiceClient.GetThumbnailAsync(imageFileStream, width, height, smartCropping);
+                return await VisionServiceClient.GenerateThumbnailInStreamAsync( width, height, imageFileStream, smartCropping);
             }
 
             // -----------------------------------------------------------------------
@@ -301,13 +363,13 @@ namespace VRDrone.App
         /// <param name="height">Height of the thumbnail. It must be between 1 and 1024. Recommended minimum of 50.</param>
         /// <param name="smartCropping">Boolean flag for enabling smart cropping.</param>
         /// <returns></returns>
-        private async Task<byte[]> ThumbnailUrl(string imageUrl, int width, int height, bool smartCropping)
+        private async Task<Stream> ThumbnailUrl(string imageUrl, int width, int height, bool smartCropping)
         {
             //
             // Generate a thumbnail for the given url
             //
             Log("Calling VisionServiceClient.GetThumbnailAsync()...");
-            byte[] thumbnail = await VisionServiceClient.GetThumbnailAsync(imageUrl, width, height, smartCropping);
+            var thumbnail = await VisionServiceClient.GenerateThumbnailAsync( width, height, imageUrl, smartCropping);
             return thumbnail;
 
             // -----------------------------------------------------------------------
@@ -323,7 +385,7 @@ namespace VRDrone.App
             Debug.WriteLine(Pesan);
         }
 
-        string LogOcrResults(OcrResults results)
+        string LogOcrResults(OcrResult results)
         {
             StringBuilder stringBuilder = new StringBuilder();
 

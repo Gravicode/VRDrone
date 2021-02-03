@@ -122,6 +122,7 @@
     <Compile Include="GlobalSuppressions.cs" />
     <Compile Include="Helpers\APPCONTANTS.cs" />
     <Compile Include="Helpers\AudioCapturePermissions.cs" />
+    <Compile Include="Helpers\ComputerVisionService.cs" />
     <Compile Include="Helpers\EngineContainer.cs" />
     <Compile Include="Helpers\SpeechHelper.cs" />
     <Compile Include="Helpers\TagCommands.cs" />
