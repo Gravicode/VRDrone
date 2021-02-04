@@ -35,6 +35,14 @@ using System.Threading.Tasks;
 using Microsoft.Azure.CognitiveServices.Vision.ComputerVision.Models;
 using Windows.Storage;
 using Windows.UI.Xaml.Media.Imaging;
+using Windows.Storage.Streams;
+using Windows.Graphics.Imaging;
+using VRDrone.App.Helpers;
+using Windows.Media;
+using Microsoft.AI.Skills.Vision.ObjectDetector;
+using Microsoft.AI.Skills.SkillInterface;
+using SkillHelper;
+using FrameSourceHelper_UWP;
 
 // The speech recognizer used throughout this sample.
 
@@ -42,6 +50,34 @@ namespace VRDrone.App
 {
     public sealed partial class MainPage : Page
     {
+
+
+        #region objdetect
+        private IFrameSource m_frameSource = null;
+
+        // Vision Skills
+        // Skill wrappers
+        private List<SkillWrapper> m_skillWrappers = new List<SkillWrapper>() { new SkillWrapper(new ObjectDetectorDescriptor()) };
+        private IReadOnlyList<ISkillExecutionDevice> m_availableExecutionDevices = null;
+        private ISkillFeatureImageDescriptor m_inputImageFeatureDescriptor = null;
+
+        // Misc
+        private BoundingBoxRenderer m_bboxRenderer = null;
+        private List<bool> m_objectKindFilterList = null;
+
+        // Frames
+        private SoftwareBitmapSource m_processedBitmapSource;
+        private VideoFrame m_renderTargetFrame = null;
+
+        // Performance metrics
+        private Stopwatch m_evalStopwatch = new Stopwatch();
+        private float m_bindTime = 0;
+        private float m_evalTime = 0;
+        private Stopwatch m_renderStopwatch = new Stopwatch();
+
+        // Locks
+        private SemaphoreSlim m_lock = new SemaphoreSlim(1);
+        #endregion
         #region speech
         private SpeechHelper speech;
         private SpeechRecognizer speechRecognizer;
@@ -63,6 +99,109 @@ namespace VRDrone.App
         private DroneSimulator _simulator;
 #endif
         #region speech
+        /*
+         //untuk WPF
+        public static void ConvertUiElementToBitmap(UIElement elt, string path)
+        {
+            double h = elt.RenderSize.Height;
+            double w = elt.RenderSize.Width;
+            if (h > 0)
+            {
+                PresentationSource source = PresentationSource.FromVisual(elt);
+                RenderTargetBitmap rtb = new RenderTargetBitmap((int)w, (int)h, 96, 96, PixelFormats.Default);
+
+                VisualBrush sourceBrush = new VisualBrush(elt);
+                DrawingVisual drawingVisual = new DrawingVisual();
+                DrawingContext drawingContext = drawingVisual.RenderOpen();
+                using (drawingContext)
+                {
+                    drawingContext.DrawRectangle(sourceBrush, null, new Rect(new Point(0, 0),
+                          new Point(w, h)));
+                }
+                rtb.Render(drawingVisual);
+
+                // return rtb;
+                var encoder = new PngBitmapEncoder();
+                var outputFrame = BitmapFrame.Create(rtb);
+                encoder.Frames.Add(outputFrame);
+
+                using (var file = System.IO.File.OpenWrite(path))
+                {
+                    encoder.Save(file);
+                }
+            }
+        }
+        */
+        public async Task<StorageFile> CaptureElement(UIElement uiElement)
+        {
+            RenderTargetBitmap renderTarget = new RenderTargetBitmap();
+            await renderTarget.RenderAsync(uiElement);
+
+            IBuffer pixelBuffer = await renderTarget.GetPixelsAsync();
+            SoftwareBitmap bitmap = SoftwareBitmap.CreateCopyFromBuffer(pixelBuffer, BitmapPixelFormat.Bgra8, (int)uiElement.RenderSize.Width, (int)uiElement.RenderSize.Height, BitmapAlphaMode.Premultiplied);
+            Random rnd = new Random();
+            string fName = DateTime.Now.ToString("dd_MM_yy_HH_mm_") + rnd.Next(1, 999) + ".jpg";
+            var tempFile = await KnownFolders.PicturesLibrary.CreateFileAsync(fName);
+            //var tempFile = await StorageFile.GetFileFromApplicationUriAsync(new Uri($"ms-appdata:///temp/{fName}"));
+            SaveSoftwareBitmapToFile(bitmap, tempFile);
+            return tempFile;
+
+        }
+        public async Task<SoftwareBitmap> CaptureElementToBitmap(UIElement uiElement)
+        {
+            RenderTargetBitmap renderTarget = new RenderTargetBitmap();
+            await renderTarget.RenderAsync(uiElement);
+
+            IBuffer pixelBuffer = await renderTarget.GetPixelsAsync();
+            SoftwareBitmap bitmap = SoftwareBitmap.CreateCopyFromBuffer(pixelBuffer, BitmapPixelFormat.Bgra8, (int)uiElement.RenderSize.Width, (int)uiElement.RenderSize.Height, BitmapAlphaMode.Premultiplied);
+           
+            return bitmap;
+
+        }
+        private async void SaveSoftwareBitmapToFile(SoftwareBitmap softwareBitmap, StorageFile outputFile)
+        {
+            using (IRandomAccessStream stream = await outputFile.OpenAsync(FileAccessMode.ReadWrite))
+            {
+                // Create an encoder with the desired format
+                BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, stream);
+
+                // Set the software bitmap
+                encoder.SetSoftwareBitmap(softwareBitmap);
+
+                // Set additional encoding parameters, if needed
+                encoder.BitmapTransform.ScaledWidth = 960;
+                encoder.BitmapTransform.ScaledHeight = 720;
+                //encoder.BitmapTransform.Rotation = Windows.Graphics.Imaging.BitmapRotation.Clockwise90Degrees;
+                encoder.BitmapTransform.InterpolationMode = BitmapInterpolationMode.Fant;
+                encoder.IsThumbnailGenerated = true;
+
+                try
+                {
+                    await encoder.FlushAsync();
+                }
+                catch (Exception err)
+                {
+                    const int WINCODEC_ERR_UNSUPPORTEDOPERATION = unchecked((int)0x88982F81);
+                    switch (err.HResult)
+                    {
+                        case WINCODEC_ERR_UNSUPPORTEDOPERATION:
+                            // If the encoder does not support writing a thumbnail, then try again
+                            // but disable thumbnail generation.
+                            encoder.IsThumbnailGenerated = false;
+                            break;
+                        default:
+                            throw;
+                    }
+                }
+
+                if (encoder.IsThumbnailGenerated == false)
+                {
+                    await encoder.FlushAsync();
+                }
+
+
+            }
+        }
         public void NotifyUser(string strMessage, NotifyType type)
         {
             switch (type)
@@ -315,9 +454,17 @@ namespace VRDrone.App
         
         private async Task<StorageFile> TakePhoto()
         {
+            try
+            {
+                return await CaptureElement(VideoElement);
+            }
+            catch (Exception)
+            {
 
-           
-            return null;
+                return null;
+            }
+          
+          
         }
         /// <summary>
         /// Handle events fired when a result is generated. This may include a garbage rule that fires when general room noise
@@ -441,16 +588,45 @@ namespace VRDrone.App
                         case TagCommands.SeeMe:
                             {
                                 
-                                var photo = await TakePhoto();
+                                var photo = await CaptureElementToBitmap(VideoElement);
                                 //call computer vision
                                 if (photo != null)
                                 {
+                                    if (m_lock.Wait(0))
+                                    {
+                                        #pragma warning disable CS4014
+                                        // Purposely don't await this: want handler to exit ASAP
+                                        // so that realtime capture doesn't wait for completion.
+                                        // Instead, we unlock only when processing finishes ensuring that
+                                        // only one execution is active at a time, dropping frames or
+                                        // aborting skill runs as necessary
+                                        Task.Run(async () =>
+                                        {
+                                            try
+                                            {
+                                                var frame = VideoFrame.CreateWithSoftwareBitmap(photo);
+                                                // Retrieve and filter results if requested
+                                                IReadOnlyList<ObjectDetectorResult> detectedObjects = await DetectObjectsAsync(frame);
+                                                await DisplayFrameAndResultAsync(frame, detectedObjects);
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                NotifyUser(ex.Message);
+                                            }
+                                            finally
+                                            {
+                                                m_lock.Release();
+                                            }
+                                        });
+                                        #pragma warning restore CS4014
+                                    }
+                                    /*
                                     var res = await ApiContainer.GetApi<ComputerVisionService>().RecognizeImage(photo);
                                     if (!string.IsNullOrEmpty(res))
                                     {
                                         await speech.Read(res);
                                         //resultTextBlock.Text = "I see " + res;
-                                    }
+                                    }*/
                                 }
                                 else
                                 {
@@ -461,7 +637,8 @@ namespace VRDrone.App
                        
 
                         case TagCommands.TakePhoto:
-                            await speech.Read("I will take your picture boss");
+                            var img = await TakePhoto();
+                            await speech.Read("photo captured");
                             //GetPhotoFromCam();
                             break;
                         case TagCommands.Thanks:
@@ -508,6 +685,10 @@ namespace VRDrone.App
         public MainPage()
         {
             this.InitializeComponent();
+            // Initialize helper class used to render the skill results on screen
+            m_bboxRenderer = new BoundingBoxRenderer(UIOverlayCanvas);
+            m_processedBitmapSource = new SoftwareBitmapSource();
+
             PopulateCommands();
             ApiContainer.Register<ComputerVisionService>(new ComputerVisionService());
             this.dispatcher = new UIDispatcher(SynchronizationContext.Current);
@@ -635,5 +816,204 @@ namespace VRDrone.App
 #endif
         }
         #endregion
+
+
+       
+        private async void Page_Loaded(object sender, RoutedEventArgs e)
+        {
+           
+            m_lock.Wait();
+            {
+                //NotifyUser("Initializing skill...");
+                m_availableExecutionDevices = m_skillWrappers[0].ExecutionDevices;
+
+                await InitializeObjectDetectorAsync();
+                //await UpdateSkillUIAsync();
+            }
+            m_lock.Release();
+        }
+        /// <summary>
+        /// Initialize the ObjectDetector skill
+        /// </summary>
+        /// <param name="device"></param>
+        /// <returns></returns>
+        private async Task InitializeObjectDetectorAsync(ISkillExecutionDevice device = null)
+        {
+            await m_skillWrappers[0].InitializeSkillAsync(device);
+            m_inputImageFeatureDescriptor = m_skillWrappers[0].Binding["InputImage"].Descriptor as SkillFeatureImageDescriptor;
+        }
+
+        /// <summary>
+        /// Bind and evaluate the frame with the ObjectDetector skill
+        /// </summary>
+        /// <param name="frame"></param>
+        /// <returns></returns>
+        private async Task<IReadOnlyList<ObjectDetectorResult>> DetectObjectsAsync(VideoFrame frame)
+        {
+            m_evalStopwatch.Restart();
+
+            var objDetectionBinding = m_skillWrappers[0].Binding as ObjectDetectorBinding;
+
+            // Bind
+            await objDetectionBinding.SetInputImageAsync(frame);
+
+            m_bindTime = (float)m_evalStopwatch.ElapsedTicks / Stopwatch.Frequency * 1000f;
+            m_evalStopwatch.Restart();
+
+            // Evaluate
+            await m_skillWrappers[0].Skill.EvaluateAsync(objDetectionBinding);
+
+            m_evalTime = (float)m_evalStopwatch.ElapsedTicks / Stopwatch.Frequency * 1000f;
+            m_evalStopwatch.Stop();
+
+            return objDetectionBinding.DetectedObjects;
+        }
+
+        /// <summary>
+        /// Render ObjectDetector skill results
+        /// </summary>
+        /// <param name="frame"></param>
+        /// <param name="objectDetections"></param>
+        /// <returns></returns>
+        private async Task DisplayFrameAndResultAsync(VideoFrame frame, IReadOnlyList<ObjectDetectorResult> detectedObjects)
+        {
+            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, async () =>
+            {
+                try
+                {
+                    SoftwareBitmap targetSoftwareBitmap = frame.SoftwareBitmap;
+
+                    // If we receive a Direct3DSurface-backed VideoFrame, convert to a SoftwareBitmap in a format that can be rendered via the UI element
+                    if (targetSoftwareBitmap == null)
+                    {
+                        if (m_renderTargetFrame == null)
+                        {
+                            m_renderTargetFrame = new VideoFrame(BitmapPixelFormat.Bgra8, frame.Direct3DSurface.Description.Width, frame.Direct3DSurface.Description.Height, BitmapAlphaMode.Ignore);
+                        }
+
+                        // Leverage the VideoFrame.CopyToAsync() method that can convert the input Direct3DSurface-backed VideoFrame to a SoftwareBitmap-backed VideoFrame
+                        await frame.CopyToAsync(m_renderTargetFrame);
+                        targetSoftwareBitmap = m_renderTargetFrame.SoftwareBitmap;
+                    }
+                    // Else, if we receive a SoftwareBitmap-backed VideoFrame, if its format cannot already be rendered via the UI element, convert it accordingly
+                    else
+                    {
+                        if (targetSoftwareBitmap.BitmapPixelFormat != BitmapPixelFormat.Bgra8 || targetSoftwareBitmap.BitmapAlphaMode != BitmapAlphaMode.Ignore)
+                        {
+                            if (m_renderTargetFrame == null)
+                            {
+                                m_renderTargetFrame = new VideoFrame(BitmapPixelFormat.Bgra8, targetSoftwareBitmap.PixelWidth, targetSoftwareBitmap.PixelHeight, BitmapAlphaMode.Ignore);
+                            }
+
+                            // Leverage the VideoFrame.CopyToAsync() method that can convert the input SoftwareBitmap-backed VideoFrame to a different format
+                            await frame.CopyToAsync(m_renderTargetFrame);
+                            targetSoftwareBitmap = m_renderTargetFrame.SoftwareBitmap;
+                        }
+                    }
+                    await m_processedBitmapSource.SetBitmapAsync(targetSoftwareBitmap);
+
+                    // Update displayed results
+                    m_bboxRenderer.Render(detectedObjects);
+
+                    // Update the displayed performance text
+                    //UIPerfTextBlock.Text = $"bind: {m_bindTime.ToString("F2")}ms, eval: {m_evalTime.ToString("F2")}ms";
+                }
+                catch (TaskCanceledException)
+                {
+                    // no-op: we expect this exception when we change media sources
+                    // and can safely ignore/continue
+                }
+                catch (Exception ex)
+                {
+                    NotifyUser($"Exception while rendering results: {ex.Message}");
+                }
+            });
+        }
+        
+        /// <summary>
+        /// Configure an IFrameSource from a StorageFile or MediaCapture instance to produce optionally a specified format of frame
+        /// </summary>
+        /// <param name="source"></param>
+        /// <param name="inputImageDescriptor"></param>
+        /// <returns></returns>
+        private async Task ConfigureFrameSourceAsync(object source, ISkillFeatureImageDescriptor inputImageDescriptor = null)
+        {
+            await m_lock.WaitAsync();
+            {
+                // Reset bitmap rendering component
+                VideoElement.Source = null;
+                m_renderTargetFrame = null;
+                //VideoElement.Source = m_processedBitmapSource;
+
+                // Clean up previous frame source
+                if (m_frameSource != null)
+                {
+                    //m_frameSource.FrameArrived -= FrameSource_FrameAvailable;
+                    var disposableFrameSource = m_frameSource as IDisposable;
+                    if (disposableFrameSource != null)
+                    {
+                        // Lock disposal based on frame source consumers
+                        disposableFrameSource.Dispose();
+                    }
+                }
+
+                // Create new frame source and register a callback if the source fails along the way
+                m_frameSource = await FrameSourceFactory.CreateFrameSourceAsync(
+                    source,
+                    (sender, message) =>
+                    {
+                        NotifyUser(message);
+                    },
+                    inputImageDescriptor);
+
+                // TODO: Workaround for a bug in ObjectDetectorBinding when binding consecutively VideoFrames with Direct3DSurface and SoftwareBitmap
+                await m_skillWrappers[0].InitializeSkillAsync(m_skillWrappers[0].Skill.Device);
+
+                // Set additional input features as exposed in the UI
+                await m_skillWrappers[0].Binding["InputObjectKindFilterList"].SetFeatureValueAsync(m_objectKindFilterList);
+                //await m_skillWrappers[0].Binding["InputConfidenceThreshold"].SetFeatureValueAsync((float)UIConfidenceThresholdControl.Value);
+            }
+            m_lock.Release();
+
+            // If we obtained a valid frame source, start it
+            if (m_frameSource != null)
+            {
+                //m_frameSource.FrameArrived += FrameSource_FrameAvailable;
+                await m_frameSource.StartAsync();
+            }
+        }
+        
+        /// <summary>
+        /// Print a message to the UI
+        /// </summary>
+        /// <param name="message"></param>
+        private void NotifyUser(String message)
+        {
+            if (Dispatcher.HasThreadAccess)
+            {
+                //UIMessageTextBlock.Text = message;
+            }
+            else
+            {
+                //Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => UIMessageTextBlock.Text = message).AsTask().Wait();
+            }
+        }
+        /// <summary>
+        /// Triggered when the image control is resized, making sure the canvas size stays in sync with the frame display control.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void VideoElement_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            // Make sure the aspect ratio is honored when rendering the body limbs
+            float cameraAspectRatio = 1.0f;// (float)m_frameSource.FrameWidth / m_frameSource.FrameHeight;
+            float previewAspectRatio = (float)(VideoElement.ActualWidth / VideoElement.ActualHeight);
+            UIOverlayCanvas.Width = cameraAspectRatio >= previewAspectRatio ? VideoElement.ActualWidth : VideoElement.ActualHeight * cameraAspectRatio;
+            UIOverlayCanvas.Height = cameraAspectRatio >= previewAspectRatio ? VideoElement.ActualWidth / cameraAspectRatio : VideoElement.ActualHeight;
+
+            m_bboxRenderer.ResizeContent(e);
+        }
+
+
     }
 }

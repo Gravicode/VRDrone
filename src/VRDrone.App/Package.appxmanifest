@@ -49,6 +49,7 @@
     <Capability Name="internetClientServer"/>
     <Capability Name="privateNetworkClientServer"/>
     <uap3:Capability Name="backgroundMediaPlayback"/>
+    <uap:Capability Name="picturesLibrary"/>
     <DeviceCapability Name="webcam"/>
     <DeviceCapability Name="microphone"/>
   </Capabilities>

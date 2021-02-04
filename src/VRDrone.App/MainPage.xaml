@@ -6,6 +6,7 @@
     xmlns:local="using:VRDrone.App"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Loaded="Page_Loaded"
     mc:Ignorable="d"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
@@ -276,7 +277,8 @@
             </Grid>
 
             <Grid Grid.Column="1" x:Name="VideoGrid" Background="DimGray" ColumnSpacing="6" RowSpacing="6">
-                <MediaElement x:Name="VideoElement" AreTransportControlsEnabled="False" AutoPlay="False" />
+                <MediaElement x:Name="VideoElement" AreTransportControlsEnabled="False" AutoPlay="False" SizeChanged="VideoElement_SizeChanged"/>
+                <Canvas Name="UIOverlayCanvas" Canvas.ZIndex="0" HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Grid>
 
         </Grid>
